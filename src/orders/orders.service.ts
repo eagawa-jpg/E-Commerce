@@ -1,9 +1,11 @@
+
 import {
   Injectable,
   NotFoundException,
   BadRequestException,
   OnModuleInit,
 } from '@nestjs/common';
+
 import { DatabaseService } from '../database/database.service';
 import { RowDataPacket, ResultSetHeader } from 'mysql2';
 import { CreateOrderDto } from './dto/create-order.dto';
@@ -16,9 +18,6 @@ export class OrdersService implements OnModuleInit {
     await this.initDatabaseTables();
   }
 
-  /**
-   * Ensures orders and order_items tables exist with product_id and user_id relations
-   */
   async initDatabaseTables() {
     const pool = this.db.getPool();
 
@@ -56,9 +55,7 @@ export class OrdersService implements OnModuleInit {
     `);
   }
 
-  /**
-   * List all orders (with user and product details joined)
-   */
+  // GET all orders
   async getAll(filters?: { user_id?: number; status?: string }) {
     const pool = this.db.getPool();
     const conditions: string[] = [];
@@ -78,7 +75,7 @@ export class OrdersService implements OnModuleInit {
       conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const sql = `
-      SELECT 
+      SELECT
         o.order_id,
         o.user_id,
         u.username,
@@ -104,14 +101,12 @@ export class OrdersService implements OnModuleInit {
     return orders;
   }
 
-  /**
-   * Get single order by ID
-   */
+  // GET one order
   async getOne(id: number) {
     const pool = this.db.getPool();
 
     const [orders] = await pool.execute<RowDataPacket[]>(
-      `SELECT 
+      `SELECT
         o.order_id,
         o.user_id,
         u.username,
@@ -140,16 +135,12 @@ export class OrdersService implements OnModuleInit {
     return orders[0];
   }
 
-  /**
-   * Get all orders placed by a specific user
-   */
+  // GET orders by user
   async getByUserId(userId: number) {
     return this.getAll({ user_id: userId });
   }
 
-  /**
-   * Place an order for a user with product_id
-   */
+  // POST create order
   async create(dto: CreateOrderDto) {
     const conn = await this.db.getPool().getConnection();
 
@@ -157,9 +148,9 @@ export class OrdersService implements OnModuleInit {
       await conn.beginTransaction();
 
       let username: string | null = null;
-      let userId = dto.user_id !== undefined ? Number(dto.user_id) : null;
+      const userId =
+        dto.user_id !== undefined ? Number(dto.user_id) : null;
 
-      // 1. If user_id provided, verify user exists
       if (userId !== null) {
         const [userRows] = await conn.execute<RowDataPacket[]>(
           'SELECT id, username FROM users WHERE id = ?',
@@ -169,23 +160,30 @@ export class OrdersService implements OnModuleInit {
         if (userRows.length === 0) {
           throw new NotFoundException(`User with ID ${userId} not found`);
         }
+
         username = userRows[0].username;
       }
 
-      // 2. Validate product_id or items
-      const productOrdersToCreate: { productId: number; quantity: number }[] = [];
+      const productOrdersToCreate: {
+        productId: number;
+        quantity: number;
+      }[] = [];
 
       if (dto.product_id !== undefined) {
         productOrdersToCreate.push({
           productId: Number(dto.product_id),
-          quantity: dto.quantity && dto.quantity > 0 ? Number(dto.quantity) : 1,
+          quantity: dto.quantity && dto.quantity > 0
+            ? Number(dto.quantity)
+            : 1,
         });
-      } else if (dto.items && Array.isArray(dto.items) && dto.items.length > 0) {
+      } else if (dto.items && Array.isArray(dto.items)) {
         for (const item of dto.items) {
           if (item.product_id) {
             productOrdersToCreate.push({
               productId: Number(item.product_id),
-              quantity: item.quantity && item.quantity > 0 ? Number(item.quantity) : 1,
+              quantity: item.quantity && item.quantity > 0
+                ? Number(item.quantity)
+                : 1,
             });
           }
         }
@@ -203,7 +201,6 @@ export class OrdersService implements OnModuleInit {
       const customerEmail = dto.customer_email || null;
 
       for (const item of productOrdersToCreate) {
-        // Look up product from products table
         const [productRows] = await conn.execute<RowDataPacket[]>(
           'SELECT product_id, product_name, price FROM products WHERE product_id = ?',
           [item.productId],
@@ -217,12 +214,14 @@ export class OrdersService implements OnModuleInit {
 
         const product = productRows[0];
         const unitPrice = Number(product.price);
-        const totalPrice = Number((unitPrice * item.quantity).toFixed(2));
+        const totalPrice = Number(
+          (unitPrice * item.quantity).toFixed(2),
+        );
 
-        // Insert into orders table
         const [orderResult] = await conn.execute<ResultSetHeader>(
-          `INSERT INTO orders 
-           (user_id, product_id, quantity, total_price, total_amount, customer_name, customer_email, status)
+          `INSERT INTO orders
+           (user_id, product_id, quantity, total_price, total_amount,
+            customer_name, customer_email, status)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             userId,
@@ -239,9 +238,9 @@ export class OrdersService implements OnModuleInit {
         const orderId = orderResult.insertId;
         createdOrderIds.push(orderId);
 
-        // Also record in order_items
         await conn.execute<ResultSetHeader>(
-          `INSERT INTO order_items (order_id, product_id, product_name, price, quantity, subtotal)
+          `INSERT INTO order_items
+           (order_id, product_id, product_name, price, quantity, subtotal)
            VALUES (?, ?, ?, ?, ?, ?)`,
           [
             orderId,
@@ -257,16 +256,16 @@ export class OrdersService implements OnModuleInit {
       await conn.commit();
 
       if (createdOrderIds.length === 1) {
-        const single = await this.getOne(createdOrderIds[0]);
         return {
           message: 'Order placed successfully',
-          order: single,
+          order: await this.getOne(createdOrderIds[0]),
         };
       }
 
       const createdList: any[] = [];
-      for (const oid of createdOrderIds) {
-        createdList.push(await this.getOne(oid));
+
+      for (const orderId of createdOrderIds) {
+        createdList.push(await this.getOne(orderId));
       }
 
       return {
@@ -281,23 +280,31 @@ export class OrdersService implements OnModuleInit {
     }
   }
 
-  /**
-   * Update order status
-   */
+  // PUT/PATCH update order status
   async updateStatus(id: number, status: string) {
-    await this.getOne(id);
+    const orderId = Number(id);
+
+    if (!Number.isInteger(orderId) || orderId <= 0) {
+      throw new BadRequestException('Valid Order ID is required');
+    }
+
+    if (typeof status !== 'string' || status.trim() === '') {
+      throw new BadRequestException('Valid status is required');
+    }
+
+    const cleanStatus = status.trim();
+
+    await this.getOne(orderId);
 
     await this.db.getPool().execute(
       'UPDATE orders SET status = ? WHERE order_id = ?',
-      [status, id],
+      [cleanStatus, orderId],
     );
 
-    return this.getOne(id);
+    return this.getOne(orderId);
   }
 
-  /**
-   * Delete an order
-   */
+  // DELETE order
   async delete(id: number) {
     await this.getOne(id);
 
