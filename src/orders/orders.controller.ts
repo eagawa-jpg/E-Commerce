@@ -77,13 +77,16 @@ export class OrdersController {
   }
 
   // PUT update order status
-  @Put(':id')
-  update(
-    @Param('id', ParseIntPipe) id: number,
-    @Body() body: UpdateOrderStatusDto,
-  ) {
-    return this.ordersService.updateStatus(id, body.status);
-  }
+ @Put(':id')
+update(
+  @Param('id', ParseIntPipe) id: number,
+  @Body() body: UpdateOrderStatusDto,
+) {
+  console.log('PUT ORDER BODY:', body);
+  console.log('STATUS VALUE:', body?.status);
+
+  return this.ordersService.updateStatus(id, body?.status);
+}
 
   // PATCH update order status
   @Patch(':id/status')
